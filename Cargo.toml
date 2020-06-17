@@ -1,0 +1,16 @@
+[workspace]
+members = [".", "shared"]
+
+[package]
+name = "git-corun"
+version = "0.1.0"
+authors = ["Fredrik Østrem <frx.apps@gmail.com>"]
+edition = "2018"
+license = "MIT"
+publish = false
+
+[dependencies]
+shared = { path = "./shared" }
+clap = "2.33.0"
+chrono = "0.4.9"
+dirs = "2.0.2"

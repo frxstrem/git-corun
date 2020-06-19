@@ -8,19 +8,58 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command, ExitStatus, Stdio};
 
 use chrono::{prelude::*, Duration, Local};
-use clap::clap_app;
+use structopt::{clap, StructOpt};
+
+#[derive(Clone, Debug, StructOpt)]
+struct Options {
+    #[structopt(
+        help = "Directory to check out and run code in",
+        short = "d",
+        long = "dir"
+    )]
+    dir: Option<PathBuf>,
+
+    #[structopt(
+        help = "Apply latest stash before running",
+        short = "s",
+        long = "stash"
+    )]
+    apply_stash: bool,
+
+    #[structopt(skip)]
+    apply_index: bool,
+
+    #[structopt(help = "Run as shell command", short = "c")]
+    shell_command: bool,
+
+    #[structopt(help = "Show output from commands", short = "v", long = "verbose")]
+    verbose: bool,
+
+    #[structopt(help = "List of commits to run on", default_value = "HEAD")]
+    commits: Vec<String>,
+
+    #[structopt(help = "Command to execute", required = true, last = true)]
+    command: Vec<String>,
+}
+
+impl Options {
+    fn from_args_safe() -> clap::Result<Self> {
+        Ok(Self::from_clap(&Self::clap().get_matches_safe()?))
+    }
+}
 
 fn main() {
-    let args = Args::parse().unwrap_or_else(|err| {
+    let opts = Options::from_args_safe().unwrap_or_else(|err| {
         if err.use_stderr() {
             eprintln!("{}", err.message);
             process::exit(128);
         }
         let out = io::stdout();
-        writeln!(&mut out.lock(), "{}", err.message).expect("Error writing Error to stdout");
+        writeln!(&mut out.lock(), "{}", err.message).expect("Error writing error to stdout");
         process::exit(128);
     });
-    match app(args) {
+
+    match app(opts) {
         Err(err) => {
             eprintln!("Error: {}", err);
             process::exit(128);
@@ -29,21 +68,21 @@ fn main() {
     }
 }
 
-fn app(args: Args) -> Result<i32, Box<dyn Error>> {
+fn app(opts: Options) -> Result<i32, Box<dyn Error>> {
     // get git directory
     let git_dir = git::get_git_dir()?;
 
     // get latest stash commit
-    let stash_commit = if args.apply_stash {
+    let stash_commit = if opts.apply_stash {
         Some(git::get_commit_hash(&git_dir, "refs/stash")?)
-    } else if args.apply_index {
+    } else if opts.apply_index {
         unimplemented!()
     } else {
         None
     };
 
     // expand list of commits
-    let commits = args
+    let commits = opts
         .commits
         .iter()
         .map(|commit| git::get_commit_hashes(&git_dir, commit))
@@ -53,7 +92,7 @@ fn app(args: Args) -> Result<i32, Box<dyn Error>> {
         .collect::<Vec<_>>();
 
     // create temporary directory (and possibly clean up old ones)
-    let tmpdir = create_directory(&args)?;
+    let tmpdir = create_directory(&opts)?;
     eprintln!("Running in directory: {}", tmpdir.to_string_lossy());
 
     // git clone into temporary directory
@@ -62,7 +101,7 @@ fn app(args: Args) -> Result<i32, Box<dyn Error>> {
     let mut last_exit_code = 0;
     for commit in commits {
         last_exit_code = run_app_for(
-            &args,
+            &opts,
             &git_dir,
             tmpdir.as_ref(),
             &commit,
@@ -74,7 +113,7 @@ fn app(args: Args) -> Result<i32, Box<dyn Error>> {
 }
 
 fn run_app_for(
-    args: &Args,
+    opts: &Options,
     git_dir: &Path,
     work_tree: &Path,
     commit: &str,
@@ -98,11 +137,11 @@ fn run_app_for(
     print_commit(&git_dir, &commit, Status::Pending)?;
 
     // run command in repo
-    let exit_status = run_in(&args, args.command.iter().map(String::as_str), &work_tree)?;
+    let exit_status = run_in(&opts, opts.command.iter().map(String::as_str), &work_tree)?;
     let status = exit_status.into();
 
     // print status
-    if !args.verbose {
+    if !opts.verbose {
         let stdout = io::stdout();
         let mut stdout = stdout.lock();
         write!(stdout, "\x1b[1F\x1b[K")?;
@@ -124,7 +163,7 @@ fn print_commit(
     git::show_commit(git_dir, commit, &format)
 }
 
-fn run_in<'a, I>(args: &Args, command: I, dir: impl AsRef<Path>) -> io::Result<ExitStatus>
+fn run_in<'a, I>(opts: &Options, command: I, dir: impl AsRef<Path>) -> io::Result<ExitStatus>
 where
     I: IntoIterator<Item = &'a str>,
 {
@@ -134,7 +173,7 @@ where
     let cmd_first = command.next().unwrap();
     let cmd_rest = command.collect::<Vec<_>>();
 
-    let (exec_name, cmd_args) = if args.shell_command {
+    let (exec_name, cmd_args) = if opts.shell_command {
         let exec_name = "/bin/bash";
         let mut args = vec!["-c", cmd_first, "--"];
         args.extend(cmd_rest);
@@ -143,7 +182,7 @@ where
         (cmd_first, cmd_rest)
     };
 
-    if args.verbose {
+    if opts.verbose {
         Command::new(&exec_name)
             .args(&cmd_args)
             .current_dir(&dir)
@@ -166,10 +205,10 @@ fn default_base_dir() -> PathBuf {
     dirs::home_dir().expect("no home dir").join(".git-corun")
 }
 
-fn create_directory(args: &Args) -> io::Result<PathBuf> {
+fn create_directory(opts: &Options) -> io::Result<PathBuf> {
     const DATE_FORMAT_STR: &str = "%Y%m%d-%H%M%S-%f";
 
-    let path = match &args.dir {
+    let path = match &opts.dir {
         Some(dir) => dir.clone(),
         None => {
             let base_dir = default_base_dir();
@@ -254,53 +293,5 @@ impl From<ExitStatus> for Status {
             Some(code @ 125) => Status::Inconclusive(code),
             code => Status::Abort(code),
         }
-    }
-}
-
-struct Args {
-    dir: Option<PathBuf>,
-
-    apply_stash: bool,
-    apply_index: bool,
-    shell_command: bool,
-    verbose: bool,
-
-    commits: Vec<String>,
-    command: Vec<String>,
-}
-
-impl Args {
-    fn parse() -> clap::Result<Args> {
-        let matches = clap_app!(("git-corun") =>
-            (@group apply =>
-                (@arg apply_stash: -s --stash      "Apply latest stash before running")
-                // (@arg apply_index: -i --index      "Apply index before running")
-            )
-            (@arg shell_command: -c               "Run as shell command")
-            (@arg verbose: -v --verbose           "Show output from commands")
-            (@arg dir: -d --dir [directory]  "Directory to check out and run code in")
-            (@arg commits: [commits] ...          "List of commits to run on")
-            (@arg command: <command> ... +last    "Command to execute")
-        )
-        .get_matches_safe()?;
-
-        Ok(Args {
-            dir: matches.value_of("dir").map(PathBuf::from),
-
-            apply_stash: matches.is_present("apply_stash"),
-            apply_index: false,
-            shell_command: matches.is_present("shell_command"),
-            verbose: matches.is_present("verbose"),
-
-            commits: matches
-                .values_of("commits")
-                .map(|commits| commits.map(str::to_string).collect())
-                .unwrap_or_else(|| vec!["HEAD".to_string()]),
-            command: matches
-                .values_of("command")
-                .unwrap()
-                .map(str::to_string)
-                .collect(),
-        })
     }
 }

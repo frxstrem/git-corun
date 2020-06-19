@@ -1,3 +1,5 @@
+mod git;
+
 use std::error::Error;
 use std::fmt::Display;
 use std::fs;
@@ -7,8 +9,6 @@ use std::process::{self, Command, ExitStatus, Stdio};
 
 use chrono::{prelude::*, Duration, Local};
 use clap::clap_app;
-
-use shared::git_old as git;
 
 fn main() {
     let args = Args::parse().unwrap_or_else(|err| {

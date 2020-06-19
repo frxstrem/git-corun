@@ -39,7 +39,7 @@ macro_rules! gitc_args {
 }
 
 macro_rules! gitc {
-    ($($tt:tt)*) => { $crate::git_old::run::run_gitc(gitc_args!($($tt)*)) };
+    ($($tt:tt)*) => { $crate::git::run::run_gitc(gitc_args!($($tt)*)) };
 }
 
 pub fn run_gitc<S>(args: &[S]) -> io::Result<String>
